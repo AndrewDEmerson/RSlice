@@ -9,3 +9,4 @@ edition = "2018"
 [dependencies]
 stl_io = "0.6.0"
 png = "0.17.2"
+nalgebra = "0.29.0"
