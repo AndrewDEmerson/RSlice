@@ -1,4 +1,5 @@
 use std::{
+    env,
     fs::{File, OpenOptions},
     io::BufWriter,
     path::Path,
@@ -7,6 +8,8 @@ use std::{
 use na::vector;
 
 extern crate nalgebra as na;
+
+mod quadtree;
 
 #[derive(Debug)]
 struct Dimensions {
@@ -17,15 +20,26 @@ struct Dimensions {
     z_min: f32,
     z_max: f32,
 }
-const IMAGE_SIZE: usize = 500;
+const IMAGE_SIZE: usize = 600;
 
 fn main() {
     println!("Start of Program");
+    // Read height to slice at from the cmd line
+    let mut plane_height: f32 = 13.6;
+    let mut stl_path = String::from("sphere.stl");
+    let mut arg = env::args();
+    arg.next();
+    if let Some(v) = arg.next() {
+        plane_height = v.parse::<f32>().unwrap();
+    }
+    if let Some(v) = arg.next() {
+        stl_path = v;
+    }
 
     let path = Path::new(r"output.png");
-    let mut data = [1; IMAGE_SIZE * IMAGE_SIZE];
+    let mut data = vec![1; IMAGE_SIZE * IMAGE_SIZE];
 
-    let mut file = OpenOptions::new().read(true).open("mesh.stl").unwrap();
+    let mut file = OpenOptions::new().read(true).open(stl_path).unwrap();
     let obj = stl_io::create_stl_reader(&mut file).unwrap();
     //convert iter to an array
     let mut triangle_vec: Vec<NaTri> = Vec::new();
@@ -57,7 +71,7 @@ fn main() {
     println!("number of triangles: {0}", triangle_vec.len());
     //Find the bounding box of the model
     let mut obj_dim = obj_dimensions(&triangle_vec);
-    //Move object so its base is at z=0
+    //Move object so its base is at z=0 and in positive quadrant
     for triangle in &mut triangle_vec {
         (0..3).for_each(|point| {
             triangle.vertices[point].x -= obj_dim.x_min;
@@ -65,10 +79,14 @@ fn main() {
             triangle.vertices[point].z -= obj_dim.z_min;
         });
     }
+    obj_dim.x_max -= obj_dim.x_min;
+    obj_dim.y_max -= obj_dim.y_min;
+    obj_dim.z_max -= obj_dim.z_min;
+    obj_dim.x_min = 0f32;
+    obj_dim.y_min = 0f32;
+    obj_dim.z_min = 0f32;
 
-    obj_dim = obj_dimensions(&triangle_vec);
-    let plane_height: f32 = 13.6;
-
+    let mut lines: Vec<DirLine> = Vec::new();
     for triangle in triangle_vec {
         let intersect: [bool; 3] = [
             triangle.vertices[0].z >= plane_height,
@@ -78,8 +96,8 @@ fn main() {
         if intersect[0] as u8 + intersect[1] as u8 + intersect[2] as u8 == 1
             || intersect[0] as u8 + intersect[1] as u8 + intersect[2] as u8 == 2
         {
-            //println!("tri intersects");
-
+            // The triangle intersects the plane at this point
+            // Determine the shared point (alone on one side of the plane), and the two other points that connect to it.
             let (shared_point, others) = {
                 if intersect[0] != intersect[1] && intersect[0] != intersect[2] {
                     (
@@ -98,6 +116,8 @@ fn main() {
                     )
                 }
             };
+            // Calculate the two points where the triangle edges intersect with the plane,
+            // the complete intersection is a line between these two points.
             let direction_vecs = [
                 na::vector!(
                     others[0].x - shared_point[0],
@@ -117,46 +137,60 @@ fn main() {
             let intersection_points = [
                 na::point!(
                     shared_point[0] + direction_vecs[0].x * transforms[0],
-                    shared_point[1] + direction_vecs[0].y * transforms[0],
-                    shared_point[2] + direction_vecs[0].z * transforms[0]
+                    shared_point[1] + direction_vecs[0].y * transforms[0]
                 ),
                 na::point!(
                     shared_point[0] + direction_vecs[1].x * transforms[1],
-                    shared_point[1] + direction_vecs[1].y * transforms[1],
-                    shared_point[2] + direction_vecs[1].z * transforms[1]
+                    shared_point[1] + direction_vecs[1].y * transforms[1]
                 ),
             ];
-            draw_line(&obj_dim, &mut data, intersection_points);
+            lines.push(DirLine {
+                normal: triangle.normal.xy(),
+                vertices: [intersection_points[0].xy(), intersection_points[1].xy()],
+            });
+            draw_line(&obj_dim, &mut data, intersection_points, 60);
         }
     }
-    write_array_to_file(path, data);
+
+    let mut qt = quadtree::QuadTree::new([na::point!(obj_dim.x_min, obj_dim.y_min), na::point!(obj_dim.x_max, obj_dim.y_max)]);
+    for l in lines{
+        qt.insert(l.vertices[0]);
+        qt.insert(l.vertices[1]);
+    }
+    println!("{0}",qt.get_points().len());
+
+    write_array_to_file(path, &data);
 }
 
-fn draw_line(obj_dim: &Dimensions, data: &mut [u8], intersection_points: [na::Point3<f32>; 2]) {
+fn draw_line(
+    obj_dim: &Dimensions,
+    data: &mut [u8],
+    intersection_points: [na::Point2<f32>; 2],
+    color: u8,
+) {
     let multiplier = {
         if obj_dim.x_max > obj_dim.y_max {
-            obj_dim.x_max
+            obj_dim.x_max + 1.0
         } else {
-            obj_dim.y_max
+            obj_dim.y_max + 1.0
         }
     };
     let line_vec = na::vector!(
         intersection_points[1].x - intersection_points[0].x,
-        intersection_points[1].y - intersection_points[0].y,
-        intersection_points[1].z - intersection_points[0].z
+        intersection_points[1].y - intersection_points[0].y
     );
     // This is an inefficent way of drawing lines, fix it later
-    for step in 0..100 {
-        data[(((intersection_points[0][0] + line_vec[0] * step as f32 / 100f32) * IMAGE_SIZE as f32
+    for step in 0..1000 {
+        data[(((intersection_points[0][0] + line_vec[0] * step as f32 / 1000f32) * IMAGE_SIZE as f32
             / multiplier) as usize)
-            + ((intersection_points[0][1] + line_vec[1] * step as f32 / 100f32) * IMAGE_SIZE as f32
+            + ((intersection_points[0][1] + line_vec[1] * step as f32 / 1000f32) * IMAGE_SIZE as f32
                 / multiplier) as usize
-                * IMAGE_SIZE as usize] = 255;
+                * IMAGE_SIZE as usize] = color;
     }
 }
 
 // Take a pixel array and save it to the file
-fn write_array_to_file(path: &Path, data: [u8; IMAGE_SIZE * IMAGE_SIZE]) {
+fn write_array_to_file(path: &Path, data: &[u8]) {
     let file = File::create(path).unwrap();
     let w = &mut BufWriter::new(file);
     let mut encoder = png::Encoder::new(w, IMAGE_SIZE as u32, IMAGE_SIZE as u32);
@@ -207,4 +241,15 @@ pub struct NaTri {
     pub normal: na::Vector3<f32>,
     /// The three vertices of the Triangle.
     pub vertices: [na::Point3<f32>; 3],
+}
+
+pub struct DirLine {
+    // a perservation of the original triangle's normal, used to determine solidity of a polygon
+    pub normal: na::Vector2<f32>,
+    // Two end points of a line
+    pub vertices: [na::Point2<f32>; 2],
+}
+
+pub struct Polygon {
+    pub points: Vec<na::Point2<f32>>,
 }
