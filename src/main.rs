@@ -3,6 +3,7 @@ use std::{
     fs::{File, OpenOptions},
     io::BufWriter,
     path::Path,
+    vec,
 };
 
 use debug_print::debug_println;
@@ -45,9 +46,14 @@ fn main() {
     );
 
     let path = Path::new(r"output.png");
-    let mut data = vec![0; IMAGE_SIZE * IMAGE_SIZE];
+    let mut raster_graphic_data = vec![0; IMAGE_SIZE * IMAGE_SIZE];
 
-    let mut file = OpenOptions::new().read(true).open(&stl_path).unwrap_or_else(|error|{panic!("Could not open file: {0}\n\t{1:?}",&stl_path, error);});
+    let mut file = OpenOptions::new()
+        .read(true)
+        .open(&stl_path)
+        .unwrap_or_else(|error| {
+            panic!("Could not open file: {0}\n\t{1:?}", &stl_path, error);
+        });
     let obj = stl_io::create_stl_reader(&mut file).unwrap();
     // convert iter to an array
     let mut triangle_vec: Vec<NaTri> = Vec::new();
@@ -93,6 +99,18 @@ fn main() {
     obj_dim.y_min = 0f32;
     obj_dim.z_min = 0f32;
 
+    let all_points: Vec<PairedPoints> =
+        generate_point_collection(&triangle_vec, plane_height);
+
+    let polygons: Vec<Polygon> = generate_polygons(all_points, obj_dim, &mut raster_graphic_data);
+    debug_println!("{}", polygons.len());
+    write_array_to_file(path, &raster_graphic_data);
+}
+
+fn generate_point_collection(
+    triangle_vec: &Vec<NaTri>,
+    plane_height: f32,
+) -> Vec<PairedPoints> {
     let mut all_points: Vec<PairedPoints> = Vec::new();
     for triangle in triangle_vec {
         let intersect: [bool; 3] = [
@@ -158,12 +176,19 @@ fn main() {
             all_points[tie].id = tie;
             all_points[tie + 1].partner_index = Some(tie);
             all_points[tie + 1].id = tie + 1;
-            draw_line(&obj_dim, &mut data, intersection_points, 60);
+            //draw_line(obj_dim, data, intersection_points, 60);
         }
     }
-    //write_array_to_file(path, &data);
-    let mut pt_added: Vec<bool> = vec![false; all_points.len()];
+    all_points
+}
 
+fn generate_polygons(
+    all_points: Vec<PairedPoints>,
+    obj_dim: Dimensions,
+    data: &mut Vec<u8>,
+) -> Vec<Polygon> {
+    let mut polygons: Vec<Polygon> = Vec::new();
+    let mut has_been_touched: Vec<bool> = vec![false; all_points.len()];
     let mut qt = quadtree::QuadTree::new([
         na::point!(obj_dim.x_min, obj_dim.y_min),
         na::point!(obj_dim.x_max, obj_dim.y_max),
@@ -171,30 +196,40 @@ fn main() {
     for pt in &all_points {
         qt.insert(pt);
     }
-    let mut p1 = 0;
-    let mut p2 = qt.get_neighboring_point(
-        &all_points[all_points[p1].partner_index.unwrap()],
-        &pt_added,
-    );
-    loop {
-        pt_added[p2] = true;
-        //println!("p1: {0}, p2: {1}", p1, p2);
-        draw_line(
-            &obj_dim,
-            &mut data,
-            [all_points[p1].coords, all_points[p2].coords],
-            255,
-        );
-        p1 = p2;
-        p2 = qt.get_neighboring_point(
-            &all_points[all_points[p1].partner_index.unwrap()],
-            &pt_added,
-        );
-        if p1 == 0 || p1 == p2 {
-            break;
+    for pa in 0..has_been_touched.len() {
+        if !has_been_touched[pa] {
+            debug_println!("Creating a polygon begining at pt# {}", pa);
+            let mut new_poly = Polygon { points: Vec::new() };
+            let mut p1 = pa;
+            let mut p2 = qt.get_neighboring_point(
+                &all_points[all_points[p1].partner_index.unwrap()],
+                &has_been_touched,
+            );
+            loop {
+                new_poly.points.push(all_points[p1].coords);
+                has_been_touched[p2] = true;
+                has_been_touched[all_points[p2].partner_index.unwrap()] = true;
+                //println!("p1: {0}, p2: {1}", p1, p2);
+                draw_line(
+                    &obj_dim,
+                    data,
+                    [all_points[p1].coords, all_points[p2].coords],
+                    255,
+                );
+                p1 = p2;
+                p2 = qt.get_neighboring_point(
+                    &all_points[all_points[p1].partner_index.unwrap()],
+                    &has_been_touched,
+                );
+                if p1 == pa || p1 == p2 {
+                    break;
+                }
+            }
+            debug_println!("\t With a total of {} points", new_poly.points.len());
+            polygons.push(new_poly);
         }
     }
-    write_array_to_file(path, &data);
+    polygons
 }
 
 fn draw_line(
@@ -234,7 +269,7 @@ fn write_array_to_file(path: &Path, data: &[u8]) {
     encoder.set_color(png::ColorType::Grayscale);
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder.write_header().unwrap();
-    writer.write_image_data(&data).unwrap();
+    writer.write_image_data(data).unwrap();
 }
 
 /// Return the axis coordinates of the models bounding box's six faces.

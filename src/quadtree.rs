@@ -75,7 +75,7 @@ impl<'a> QuadTree<'a> {
                 while !self.points.is_empty() {
                     if let Some(mut s) = self.subquads.take() {
                         s[self.calc_quadrant(&self.points.last().unwrap().coords)]
-                            .insert(self.points.last().unwrap().clone());
+                            .insert(self.points.last().unwrap());
                         self.points.pop();
                         self.subquads = Some(s);
                     }
@@ -95,49 +95,45 @@ impl<'a> QuadTree<'a> {
     pub fn calc_quadrant(&self, data: &na::Point2<f32>) -> usize {
         if data.x < (self.dimensions[0].x + self.dimensions[1].x) / 2.0 {
             if data.y < (self.dimensions[0].y + self.dimensions[1].y) / 2.0 {
-                return 0;
+                0
             } else {
-                return 1;
+                1
             }
+        } else if data.y < (self.dimensions[0].y + self.dimensions[1].y) / 2.0 {
+            3
         } else {
-            if data.y < (self.dimensions[0].y + self.dimensions[1].y) / 2.0 {
-                return 3;
-            } else {
-                return 2;
-            }
+            2
         }
     }
 
     //Given a point get the point on another line that this point connects to
-    pub fn get_neighboring_point(&mut self, data: &PairedPoints, tracked_points: &[bool]) -> usize {
+    pub fn get_neighboring_point(&mut self, data: &PairedPoints, has_been_touched: &[bool]) -> usize {
         if let Some(mut s) = self.subquads.take() {
-            let r = s[self.calc_quadrant(&data.coords)].get_neighboring_point(data, tracked_points);
+            let r = s[self.calc_quadrant(&data.coords)].get_neighboring_point(data, has_been_touched);
             self.subquads = Some(s);
             r
-        } else {
-            if self.points.len() == 2 {
-                for point in &self.points {
-                    if data.id != point.id {
-                        return point.id;
-                    }
+        } else if self.points.len() == 2 {
+            for point in &self.points {
+                if data.id != point.id {
+                    return point.id;
                 }
-                panic!("Could not find a valid point");
-            } else {
-                // The quad does not have the normal two points in a box, so we must guess what the correct connecting point is
-                // Currently just find the closest point that we have not already been to.
-                let mut dist: f32 = f32::MAX;
-                let mut closest: &PairedPoints = self.points[0];
-                for point in &self.points {
-                    if data.id != point.id
-                        && tracked_points[point.id] == false
-                        && na::distance_squared(&data.coords, &point.coords) < dist
-                    {
-                        dist = na::distance_squared(&data.coords, &point.coords);
-                        closest = point;
-                    }
-                }
-                return closest.id;
             }
+            panic!("Could not find a valid point");
+        } else {
+            // The quad does not have the normal two points in a box, so we must guess what the correct connecting point is
+            // Currently just find the closest point that we have not already been to.
+            let mut dist: f32 = f32::MAX;
+            let mut closest: &PairedPoints = self.points[0];
+            for point in &self.points {
+                if data.id != point.id
+                    && !has_been_touched[point.id]
+                    && na::distance_squared(&data.coords, &point.coords) < dist
+                {
+                    dist = na::distance_squared(&data.coords, &point.coords);
+                    closest = point;
+                }
+            }
+            closest.id
         }
     }
 }
