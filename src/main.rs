@@ -5,7 +5,10 @@ use std::{
     path::Path,
 };
 
+use debug_print::debug_println;
 use na::vector;
+
+use crate::quadtree::PairedPoints;
 
 extern crate nalgebra as na;
 
@@ -23,7 +26,7 @@ struct Dimensions {
 const IMAGE_SIZE: usize = 600;
 
 fn main() {
-    println!("Start of Program");
+    println!("RSlice - written by Andrew Emerson 2021\n");
     // Read height to slice at from the cmd line
     let mut plane_height: f32 = 13.6;
     let mut stl_path = String::from("sphere.stl");
@@ -35,15 +38,19 @@ fn main() {
     if let Some(v) = arg.next() {
         stl_path = v;
     }
+    debug_println!(
+        "\tOperating on file: {file}\n\tSlicing on Z = {hght}",
+        file = stl_path,
+        hght = plane_height
+    );
 
     let path = Path::new(r"output.png");
-    let mut data = vec![1; IMAGE_SIZE * IMAGE_SIZE];
+    let mut data = vec![0; IMAGE_SIZE * IMAGE_SIZE];
 
-    let mut file = OpenOptions::new().read(true).open(stl_path).unwrap();
+    let mut file = OpenOptions::new().read(true).open(&stl_path).unwrap_or_else(|error|{panic!("Could not open file: {0}\n\t{1:?}",&stl_path, error);});
     let obj = stl_io::create_stl_reader(&mut file).unwrap();
-    //convert iter to an array
+    // convert iter to an array
     let mut triangle_vec: Vec<NaTri> = Vec::new();
-    //let mut triangle_vec: Vec<Triangle> = Vec::new();
     for tri in obj {
         let read = tri.unwrap();
         let newtri = NaTri {
@@ -68,7 +75,7 @@ fn main() {
         };
         triangle_vec.push(newtri);
     }
-    println!("number of triangles: {0}", triangle_vec.len());
+    debug_println!("number of triangles: {0}", triangle_vec.len());
     //Find the bounding box of the model
     let mut obj_dim = obj_dimensions(&triangle_vec);
     //Move object so its base is at z=0 and in positive quadrant
@@ -86,7 +93,7 @@ fn main() {
     obj_dim.y_min = 0f32;
     obj_dim.z_min = 0f32;
 
-    let mut lines: Vec<DirLine> = Vec::new();
+    let mut all_points: Vec<PairedPoints> = Vec::new();
     for triangle in triangle_vec {
         let intersect: [bool; 3] = [
             triangle.vertices[0].z >= plane_height,
@@ -144,21 +151,49 @@ fn main() {
                     shared_point[1] + direction_vecs[1].y * transforms[1]
                 ),
             ];
-            lines.push(DirLine {
-                normal: triangle.normal.xy(),
-                vertices: [intersection_points[0].xy(), intersection_points[1].xy()],
-            });
+            let tie = all_points.len();
+            all_points.push(PairedPoints::new(intersection_points[0]));
+            all_points.push(PairedPoints::new(intersection_points[1]));
+            all_points[tie].partner_index = Some(tie + 1);
+            all_points[tie].id = tie;
+            all_points[tie + 1].partner_index = Some(tie);
+            all_points[tie + 1].id = tie + 1;
             draw_line(&obj_dim, &mut data, intersection_points, 60);
         }
     }
+    //write_array_to_file(path, &data);
+    let mut pt_added: Vec<bool> = vec![false; all_points.len()];
 
-    let mut qt = quadtree::QuadTree::new([na::point!(obj_dim.x_min, obj_dim.y_min), na::point!(obj_dim.x_max, obj_dim.y_max)]);
-    for l in lines{
-        qt.insert(l.vertices[0]);
-        qt.insert(l.vertices[1]);
+    let mut qt = quadtree::QuadTree::new([
+        na::point!(obj_dim.x_min, obj_dim.y_min),
+        na::point!(obj_dim.x_max, obj_dim.y_max),
+    ]);
+    for pt in &all_points {
+        qt.insert(pt);
     }
-    println!("{0}",qt.get_points().len());
-
+    let mut p1 = 0;
+    let mut p2 = qt.get_neighboring_point(
+        &all_points[all_points[p1].partner_index.unwrap()],
+        &pt_added,
+    );
+    loop {
+        pt_added[p2] = true;
+        //println!("p1: {0}, p2: {1}", p1, p2);
+        draw_line(
+            &obj_dim,
+            &mut data,
+            [all_points[p1].coords, all_points[p2].coords],
+            255,
+        );
+        p1 = p2;
+        p2 = qt.get_neighboring_point(
+            &all_points[all_points[p1].partner_index.unwrap()],
+            &pt_added,
+        );
+        if p1 == 0 || p1 == p2 {
+            break;
+        }
+    }
     write_array_to_file(path, &data);
 }
 
@@ -181,9 +216,11 @@ fn draw_line(
     );
     // This is an inefficent way of drawing lines, fix it later
     for step in 0..1000 {
-        data[(((intersection_points[0][0] + line_vec[0] * step as f32 / 1000f32) * IMAGE_SIZE as f32
+        data[(((intersection_points[0][0] + line_vec[0] * step as f32 / 1000f32)
+            * IMAGE_SIZE as f32
             / multiplier) as usize)
-            + ((intersection_points[0][1] + line_vec[1] * step as f32 / 1000f32) * IMAGE_SIZE as f32
+            + ((intersection_points[0][1] + line_vec[1] * step as f32 / 1000f32)
+                * IMAGE_SIZE as f32
                 / multiplier) as usize
                 * IMAGE_SIZE as usize] = color;
     }
