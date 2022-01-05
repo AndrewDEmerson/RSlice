@@ -45,9 +45,6 @@ fn main() {
         hght = plane_height
     );
 
-    let path = Path::new(r"output.png");
-    let mut raster_graphic_data = vec![0; IMAGE_SIZE * IMAGE_SIZE];
-
     let mut file = OpenOptions::new()
         .read(true)
         .open(&stl_path)
@@ -98,19 +95,22 @@ fn main() {
     obj_dim.x_min = 0f32;
     obj_dim.y_min = 0f32;
     obj_dim.z_min = 0f32;
-
-    let all_points: Vec<PairedPoints> =
-        generate_point_collection(&triangle_vec, plane_height);
-
-    let polygons: Vec<Polygon> = generate_polygons(all_points, obj_dim, &mut raster_graphic_data);
-    debug_println!("{}", polygons.len());
-    write_array_to_file(path, &raster_graphic_data);
+    let mut hght: f32 = 0.0;
+    while hght < plane_height {
+        let s = format!("out\\output_{0:.2}.png", hght);
+        let path = Path::new(&s);
+        let mut raster_graphic_data = vec![0; IMAGE_SIZE * IMAGE_SIZE];
+        let all_points: Vec<PairedPoints> = generate_point_collection(&triangle_vec, hght);
+        let polygons: Vec<Polygon> = generate_polygons(all_points, &obj_dim);
+        for p in polygons {
+            draw_polygon(&p, &obj_dim, &mut raster_graphic_data);
+        }
+        write_array_to_file(path, &raster_graphic_data);
+        hght += 0.5;
+    }
 }
 
-fn generate_point_collection(
-    triangle_vec: &Vec<NaTri>,
-    plane_height: f32,
-) -> Vec<PairedPoints> {
+fn generate_point_collection(triangle_vec: &Vec<NaTri>, plane_height: f32) -> Vec<PairedPoints> {
     let mut all_points: Vec<PairedPoints> = Vec::new();
     for triangle in triangle_vec {
         let intersect: [bool; 3] = [
@@ -184,8 +184,8 @@ fn generate_point_collection(
 
 fn generate_polygons(
     all_points: Vec<PairedPoints>,
-    obj_dim: Dimensions,
-    data: &mut Vec<u8>,
+    obj_dim: &Dimensions,
+    //data: &mut Vec<u8>,
 ) -> Vec<Polygon> {
     let mut polygons: Vec<Polygon> = Vec::new();
     let mut has_been_touched: Vec<bool> = vec![false; all_points.len()];
@@ -210,12 +210,12 @@ fn generate_polygons(
                 has_been_touched[p2] = true;
                 has_been_touched[all_points[p2].partner_index.unwrap()] = true;
                 //println!("p1: {0}, p2: {1}", p1, p2);
-                draw_line(
+                /*draw_line(
                     &obj_dim,
                     data,
                     [all_points[p1].coords, all_points[p2].coords],
                     255,
-                );
+                );*/
                 p1 = p2;
                 p2 = qt.get_neighboring_point(
                     &all_points[all_points[p1].partner_index.unwrap()],
@@ -230,6 +230,17 @@ fn generate_polygons(
         }
     }
     polygons
+}
+
+fn draw_polygon(poly: &Polygon, obj_dim: &Dimensions, data: &mut [u8]) {
+    for pn in 0..poly.points.len() {
+        draw_line(
+            obj_dim,
+            data,
+            [poly.points[pn], poly.points[(pn + 1) % (poly.points.len())]],
+            255,
+        );
+    }
 }
 
 fn draw_line(
